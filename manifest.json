@@ -3,7 +3,7 @@
   "name": "PostPing",
   "short_name": "PostPing",
   "version": "1.0.0",
-  "description": "Theo dõi bài viết mới trong Facebook Group theo từng tab, lọc theo từ khóa và ghi log trong side panel.",
+  "description": "Theo dõi bài viết mới trong Facebook Group theo từng tab.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -11,7 +11,7 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "PostPing – mở bảng theo dõi cho tab này",
+    "default_title": "PostPing",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
