@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PostPing</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="top">
+    <img class="logo" src="icons/icon48.png" alt="" />
+    <div class="brand">
+      <div class="name">PostPing</div>
+      <div class="group" id="groupName">—</div>
+    </div>
+    <span class="pill" id="statusPill">Đã dừng</span>
+  </header>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <section class="card" id="form">
+    <label class="field">
+      <span class="label">Từ khóa lọc</span>
+      <textarea id="keywords" rows="2" placeholder="vd: căn hộ, cho thuê, quận 7"></textarea>
+      <span class="hint">Cách nhau bằng dấu phẩy. Khớp một từ là được, không phân biệt hoa thường và dấu. Để trống để ghi mọi bài mới.</span>
+    </label>
+
+    <label class="field inline">
+      <span class="label">Kiểm tra mỗi</span>
+      <span class="interval">
+        <input id="interval" type="number" min="1" max="1440" step="1" value="5" />
+        <span>phút</span>
+      </span>
+    </label>
+
+    <div class="actions">
+      <button id="toggleBtn" class="primary">Bắt đầu</button>
+      <button id="checkBtn" class="ghost" disabled>Kiểm tra ngay</button>
+    </div>
+
+    <dl class="meta">
+      <div><dt>Lần kiểm tra cuối</dt><dd id="lastCheck">—</dd></div>
+      <div><dt>Lần tới</dt><dd id="nextCheck">—</dd></div>
+      <div><dt>Bài mới / ghi log</dt><dd id="stats">0 / 0</dd></div>
+    </dl>
+  </section>
+
+  <section class="terminal">
+    <div class="term-bar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="term-title">post-ping — log</span>
+      <button id="clearBtn" class="term-btn" title="Xóa toàn bộ log">Xóa log</button>
+    </div>
+    <div class="term-body" id="log">
+      <div class="empty" id="emptyLog">$ chưa có log</div>
+    </div>
+  </section>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
