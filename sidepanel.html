@@ -21,20 +21,26 @@
     <section class="card" id="form">
       <label class="field">
         <span class="label">Từ khóa lọc</span>
-        <textarea
-          id="keywords"
-          rows="2"
-          placeholder="vd: căn hộ, cho thuê, quận 7"
-        ></textarea>
+        <textarea id="keywords" rows="1"></textarea>
         <span class="hint"
           >Cách nhau bằng dấu phẩy. Khớp một từ là được, không phân biệt hoa
           thường và dấu. Để trống để ghi mọi bài mới.</span
         >
       </label>
 
-      <label class="field inline">
-        <span class="label">Kiểm tra mỗi</span>
-        <span class="interval">
+      <label class="field">
+        <span class="label">Bình luận tự động</span>
+        <textarea id="comments" rows="4"></textarea>
+        <span class="hint"
+          >Mỗi dòng là một bình luận. Khi có bài mới khớp từ khóa, chọn ngẫu
+          nhiên một dòng để bình luận vào bài. Để trống để không tự bình
+          luận.</span
+        >
+      </label>
+
+      <div class="trio">
+        <label class="field" title="Tần suất kiểm tra feed (tối thiểu 1 phút)">
+          <span class="label">Kiểm tra mỗi (phút)</span>
           <input
             id="interval"
             type="number"
@@ -43,13 +49,60 @@
             step="1"
             value="5"
           />
-          <span>phút</span>
-        </span>
-      </label>
+        </label>
+        <label
+          class="field"
+          title="Chỉ bài đăng trong khoảng này mới tính là mới. 0 = không giới hạn. Không đọc được giờ đăng thì bài vẫn được tính."
+        >
+          <span class="label">Bài mới trong (phút)</span>
+          <input id="maxAge" type="number" min="0" step="1" value="0" />
+        </label>
+        <label
+          class="field"
+          title="Bài đã bình luận được lưu để không bình luận lại; bản ghi quá số giờ này sẽ bị xóa. 0 = lưu mãi."
+        >
+          <span class="label">Xóa lịch sử (giờ)</span>
+          <input id="clearHours" type="number" min="0" step="1" value="0" />
+        </label>
+      </div>
+      <div class="duo">
+        <label
+          class="field"
+          title="Chờ ngẫu nhiên trong khoảng này trước khi comment mỗi bài. 0 = comment ngay."
+        >
+          <span class="label">Trễ comment từ (giây)</span>
+          <input id="delayMin" type="number" min="0" step="1" value="0" />
+        </label>
+        <label class="field" title="Cận trên của độ trễ ngẫu nhiên.">
+          <span class="label">đến (giây)</span>
+          <input id="delayMax" type="number" min="0" step="1" value="0" />
+        </label>
+      </div>
+      <span class="hint"
+        >Bài mới: chỉ tính bài đăng trong khoảng này (0 = không giới hạn). Xóa
+        lịch sử: bài đã bình luận được nhớ để không bình luận lại, quá số giờ
+        này thì xóa (0 = lưu mãi).</span
+      >
 
       <div class="actions">
         <button id="toggleBtn" class="primary">Bắt đầu</button>
         <button id="checkBtn" class="ghost" disabled>Kiểm tra ngay</button>
+      </div>
+      <div class="actions">
+        <button
+          id="testBtn"
+          class="ghost"
+          title="Comment thử vào bài đầu tiên trên feed"
+        >
+          Test Comment
+        </button>
+        <button
+          id="historyBtn"
+          class="ghost"
+          title="Xóa hết lịch sử bài đã bình luận trong IndexedDB"
+        >
+          Xóa lịch sử
+        </button>
       </div>
 
       <dl class="meta">
@@ -62,7 +115,7 @@
           <dd id="nextCheck">—</dd>
         </div>
         <div>
-          <dt>Bài mới / ghi log</dt>
+          <dt>Bài mới / Comment</dt>
           <dd id="stats">0 / 0</dd>
         </div>
       </dl>

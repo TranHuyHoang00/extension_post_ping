@@ -121,6 +121,13 @@ textarea { resize: vertical; min-height: 44px; }
 textarea:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 70, 229, .15); }
 textarea:disabled, input:disabled { opacity: .65; }
 
+.duo { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.duo .label { font-size: 11px; }
+.duo input[type="number"] { width: 100%; text-align: left; }
+.trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.trio .label { font-size: 11px; line-height: 1.25; min-height: 28px; }
+.trio input[type="number"] { width: 100%; text-align: left; }
+
 .interval { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .interval input { width: 74px; text-align: right; }
 
@@ -134,7 +141,8 @@ button {
   border: 1px solid transparent;
 }
 button:disabled { opacity: .5; cursor: not-allowed; }
-.primary { flex: 1; background: var(--accent); color: #fff; }
+.actions button { flex: 1 1 0; }
+.primary { background: var(--accent); color: #fff; }
 .primary:hover:not(:disabled) { background: var(--accent-hover); }
 .primary.stop { background: var(--danger); }
 .primary.stop:hover:not(:disabled) { background: var(--danger-hover); }
@@ -200,24 +208,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .line.warn .msg { color: var(--term-yellow); }
 .line.error .msg { color: var(--term-red); }
 
-.post {
-  margin: 6px 0;
-  padding: 6px 0 6px 10px;
-  border-left: 2px solid var(--term-green);
-}
-.post .head { color: var(--term-green); font-weight: 700; }
-.post .body {
-  color: var(--term-text);
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  white-space: pre-wrap;
-  word-break: break-word;
-  cursor: pointer;
-}
-.post .body.open { -webkit-line-clamp: unset; }
-.post .foot { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
-.tag { color: var(--term-purple); }
-.post a { color: var(--ping); text-decoration: none; margin-left: auto; }
-.post a:hover { text-decoration: underline; }
+.line.post .msg { color: var(--term-green); font-weight: 700; }
+.line .open-link { color: var(--ping); text-decoration: none; white-space: nowrap; }
+.line .open-link:hover { text-decoration: underline; }

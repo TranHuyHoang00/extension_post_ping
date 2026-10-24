@@ -8,6 +8,7 @@ const LOG_LIMIT = 500;
 const MIN_INTERVAL = 1;
 const MAX_INTERVAL = 1440;
 const PENDING_TIMEOUT_MS = 90 * 1000;
+const MAX_COMMENTS_PER_CHECK = 3;
 
 const RESERVED_GROUP_PATHS = new Set([
   'feed', 'discover', 'joins', 'create', 'notifications', 'search', 'you', 'requests', 'learn'
@@ -60,6 +61,110 @@ function parseKeywords(raw) {
     .filter(Boolean);
 }
 
+// ---------- IndexedDB: các bài đã bình luận ----------
+
+const DB_NAME = 'postping';
+const COMMENTED_STORE = 'commented';
+let dbPromise = null;
+
+function openDb() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const store = req.result.createObjectStore(COMMENTED_STORE, { keyPath: 'key' });
+        store.createIndex('time', 'time');
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => {
+        dbPromise = null;
+        reject(req.error);
+      };
+    });
+  }
+  return dbPromise;
+}
+
+// Khóa chống trùng của một bài. ID thật (p_) là duy nhất toàn Facebook;
+// khóa hash (h_) gắn thêm group để hai group khác nhau không đè lên nhau.
+function commentKeys(groupId, post) {
+  return post.keys.map((k) => (k.startsWith('p_') ? k : `${groupId}|${k}`));
+}
+
+// Giữ chỗ nguyên tử: false nếu BẤT KỲ khóa nào đã có, ngược lại ghi tất cả và trả true.
+async function claimKeys(keys) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(COMMENTED_STORE, 'readwrite');
+    const store = tx.objectStore(COMMENTED_STORE);
+    let dup = false;
+    let pending = keys.length;
+    keys.forEach((k) => {
+      const r = store.get(k);
+      r.onsuccess = () => {
+        if (r.result) dup = true;
+        if (--pending === 0 && !dup) {
+          const now = Date.now();
+          keys.forEach((kk) => store.put({ key: kk, time: now }));
+        }
+      };
+    });
+    tx.oncomplete = () => resolve(!dup);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+async function clearCommented() {
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(COMMENTED_STORE, 'readwrite');
+    tx.objectStore(COMMENTED_STORE).clear();
+    tx.oncomplete = resolve;
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+// Comment thử vào bài đầu tiên trên feed của tab (không ghi vào lịch sử).
+async function testComment(tabId, text) {
+  if (!text) throw new Error('Chưa có nội dung bình luận.');
+  let r;
+  try {
+    r = await chrome.tabs.sendMessage(tabId, { type: 'testComment', text });
+  } catch {
+    throw new Error('Không kết nối được trang. Hãy tải lại tab Facebook rồi thử lại.');
+  }
+  if (!r || !r.ok) throw new Error((r && r.error) || 'Không comment được.');
+  return { message: `Đã comment thử vào bài ${r.author}: "${text}"` };
+}
+
+// Xóa các bản ghi cũ hơn `hours` giờ. hours = 0: không tự xóa.
+async function purgeCommented(hours) {
+  if (!(hours > 0)) return;
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(COMMENTED_STORE, 'readwrite');
+    const range = IDBKeyRange.upperBound(Date.now() - hours * 3600 * 1000);
+    const req = tx.objectStore(COMMENTED_STORE).index('time').openCursor(range);
+    req.onsuccess = () => {
+      const cur = req.result;
+      if (cur) {
+        cur.delete();
+        cur.continue();
+      }
+    };
+    tx.oncomplete = resolve;
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+// Mỗi dòng là một bình luận.
+function parseComments(raw) {
+  return (raw || '')
+    .split('\n')
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
 function matchKeywords(text, keywords) {
   const hay = normalize(text);
   return keywords.filter((k) => {
@@ -84,6 +189,12 @@ function freshState(tabId) {
     groupTitle: '',
     running: false,
     keywords: '',
+    comments: '',
+    maxAgeMin: 0,
+    clearHours: 0,
+    delayMin: 0,
+    delayMax: 0,
+    busyUntil: 0,
     intervalMin: 5,
     baseline: true,
     pending: false,
@@ -92,7 +203,7 @@ function freshState(tabId) {
     logs: [],
     lastCheck: null,
     nextCheck: null,
-    stats: { checks: 0, newPosts: 0, matched: 0 }
+    stats: { checks: 0, newPosts: 0, commented: 0 }
   };
 }
 
@@ -156,7 +267,25 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // ---------- Vòng kiểm tra ----------
 
+// Độ trễ ngẫu nhiên trong [min, max] giây, trả về mili giây.
+function randomDelayMs(minSec, maxSec) {
+  const lo = Math.max(0, Number(minSec) || 0);
+  const hi = Math.max(lo, Number(maxSec) || 0);
+  return Math.round((lo + Math.random() * (hi - lo)) * 1000);
+}
+
 async function triggerCheck(tabId, reason) {
+  if (reason === 'alarm' || reason === 'manual') {
+    const cur = await getTabState(tabId);
+    if (cur && cur.busyUntil > Date.now()) {
+      await updateTab(tabId, (s) => {
+        if (!s) return undefined;
+        pushLog(s, { type: 'check', text: reason === 'manual' ? 'Đang chờ bình luận, chưa thể kiểm tra thủ công.' : 'Bỏ qua lần kiểm tra này vì đang chờ bình luận.' });
+        return s;
+      });
+      return;
+    }
+  }
   let tab;
   try {
     tab = await chrome.tabs.get(tabId);
@@ -230,7 +359,7 @@ async function handleReady(tabId, url) {
     if (!st.pending) return { scan: false };
     // Lưu cấu hình theo cả id mới để lần sau mở group này vẫn tự điền lại.
     await chrome.storage.local.set({
-      [cfgKey(g.groupId)]: { keywords: st.keywords, intervalMin: st.intervalMin }
+      [cfgKey(g.groupId)]: { keywords: st.keywords, comments: st.comments, maxAgeMin: st.maxAgeMin, clearHours: st.clearHours, delayMin: st.delayMin, delayMax: st.delayMax, intervalMin: st.intervalMin }
     });
     await updateTab(tabId, (s) => {
       if (!s) return undefined;
@@ -248,7 +377,10 @@ async function handleScanResult(tabId, msg) {
     tabTitle = cleanTitle((await chrome.tabs.get(tabId)).title);
   } catch {}
 
-  await updateTab(tabId, (s) => {
+  // Danh sách bài cần bình luận, trả về cho content script thực hiện.
+  const toComment = [];
+
+  await updateTab(tabId, async (s) => {
     if (!s || !s.running) return undefined;
     s.pending = false;
     s.lastCheck = Date.now();
@@ -279,45 +411,115 @@ async function handleScanResult(tabId, msg) {
     } else {
       const keywords = parseKeywords(s.keywords);
       // Feed xếp mới nhất trước -> đảo lại để log theo thứ tự cũ → mới.
-      const fresh = posts.filter((p) => !isSeen(p)).reverse();
+      // Bài đăng quá maxAgeMin phút thì không tính là mới (không đọc được giờ đăng thì vẫn tính).
+      const maxAge = Number(s.maxAgeMin) || 0;
+      const tooOld = (p) => maxAge > 0 && typeof p.ageMin === 'number' && p.ageMin > maxAge;
+      const unseen = posts.filter((p) => !isSeen(p));
+      const skippedOld = unseen.filter(tooOld);
+      skippedOld.forEach(markSeen);
+      const fresh = unseen.filter((p) => !tooOld(p)).reverse();
       const entries = [];
+      const commentPool = parseComments(s.comments);
+      const commentable = [];
       for (const p of fresh) {
         markSeen(p);
         const matched = keywords.length ? matchKeywords(`${p.text}`, keywords) : [];
         if (keywords.length && matched.length === 0) continue;
-        entries.push({
-          type: 'post',
-          author: p.author || 'Không rõ',
-          text: p.text || '(Bài không có nội dung chữ)',
-          keywords: matched,
-          url: p.url
-        });
+        if (commentPool.length) commentable.push(p);
+        entries.push({ type: 'post', text: `Tìm thấy bài mới ${p.author || 'Không rõ'}`, url: p.url });
       }
       s.stats.newPosts += fresh.length;
-      s.stats.matched += entries.length;
       pushLog(s, {
         type: 'check',
         text: fresh.length
           ? `Kiểm tra: ${fresh.length} bài mới, ${entries.length} bài ${keywords.length ? 'khớp từ khóa' : 'được ghi'}.`
           : 'Kiểm tra: không có bài mới.'
       });
+      if (skippedOld.length) {
+        pushLog(s, { type: 'check', text: `Bỏ qua ${skippedOld.length} bài đăng quá ${maxAge} phút.` });
+      }
       entries.forEach((e) => pushLog(s, e));
+
+      // Chống trùng bằng IndexedDB (dùng chung mọi tab, còn sau khi tắt trình duyệt):
+      // "giữ chỗ" các khóa của bài trước khi bình luận, bài đã có khóa thì bỏ qua.
+      // Duyệt từ bài mới nhất, tối đa MAX_COMMENTS_PER_CHECK bình luận mỗi lần kiểm tra.
+      await purgeCommented(Number(s.clearHours) || 0);
+      let duplicates = 0;
+      let examined = 0;
+      for (const p of [...commentable].reverse()) {
+        if (toComment.length >= MAX_COMMENTS_PER_CHECK) break;
+        examined++;
+        if (!(await claimKeys(commentKeys(s.groupId, p)))) {
+          duplicates++;
+          continue;
+        }
+        toComment.push({
+          key: p.keys[0],
+          author: p.author || 'Không rõ',
+          text: commentPool[Math.floor(Math.random() * commentPool.length)],
+          delayMs: randomDelayMs(s.delayMin, s.delayMax)
+        });
+      }
+      if (toComment.length) {
+        // Báo cho vòng kiểm tra sau biết đang bận bình luận (tránh reload tab giữa chừng).
+        const totalDelay = toComment.reduce((n, c) => n + c.delayMs, 0);
+        s.busyUntil = Date.now() + totalDelay + toComment.length * 30000;
+        pushLog(s, {
+          type: 'info',
+          text: `Sẽ comment ${toComment.length} bài, bài đầu sau ${Math.round(toComment[0].delayMs / 1000)} giây.`
+        });
+      }
+      if (duplicates) {
+        pushLog(s, { type: 'check', text: `Bỏ qua ${duplicates} bài đã bình luận trước đó.` });
+      }
+      const limited = commentable.length - examined;
+      if (limited > 0) {
+        pushLog(s, {
+          type: 'warn',
+          text: `Chưa bình luận ${limited} bài khớp (giới hạn ${MAX_COMMENTS_PER_CHECK} bài mỗi lần kiểm tra).`
+        });
+      }
     }
 
     s.seen = [...seen].slice(-SEEN_LIMIT);
+    return s;
+  });
+  return toComment;
+}
+
+async function handleCommentResult(tabId, msg) {
+  const results = Array.isArray(msg.results) ? msg.results : [];
+  await updateTab(tabId, (s) => {
+    if (!s) return undefined;
+    s.busyUntil = 0;
+    for (const r of results) {
+      if (r.ok) s.stats.commented = (s.stats.commented || 0) + 1;
+      pushLog(
+        s,
+        r.ok
+          ? { type: 'info', text: `Đã comment bài ${r.author}: "${r.text}"` }
+          : { type: 'error', text: `Không comment được bài ${r.author}: ${r.error}` }
+      );
+    }
     return s;
   });
 }
 
 // ---------- Lệnh từ side panel ----------
 
-async function startWatching(tabId, keywords, intervalMin) {
+async function startWatching(tabId, keywords, comments, maxAgeMin, clearHours, delayMin, delayMax, intervalMin) {
   const tab = await chrome.tabs.get(tabId);
   const g = parseGroup(tab.url);
   if (!g) throw new Error('Tab này không phải trang Facebook Group.');
 
   const interval = Math.min(MAX_INTERVAL, Math.max(MIN_INTERVAL, Math.round(Number(intervalMin) || 0)));
-  await chrome.storage.local.set({ [cfgKey(g.groupId)]: { keywords, intervalMin: interval } });
+  const maxAge = Math.max(0, Math.round(Number(maxAgeMin) || 0));
+  const clearH = Math.max(0, Number(clearHours) || 0);
+  const dMin = Math.max(0, Math.round(Number(delayMin) || 0));
+  const dMax = Math.max(dMin, Math.round(Number(delayMax) || 0));
+  await chrome.storage.local.set({
+    [cfgKey(g.groupId)]: { keywords, comments, maxAgeMin: maxAge, clearHours: clearH, delayMin: dMin, delayMax: dMax, intervalMin: interval }
+  });
 
   await updateTab(tabId, (cur) => {
     const s = cur || freshState(tabId);
@@ -326,16 +528,22 @@ async function startWatching(tabId, keywords, intervalMin) {
       groupTitle: cleanTitle(tab.title) || s.groupTitle,
       running: true,
       keywords,
+      comments,
+      maxAgeMin: maxAge,
+      clearHours: clearH,
+      delayMin: dMin,
+      delayMax: dMax,
       intervalMin: interval,
       baseline: true,
       pending: false,
       seen: [],
-      stats: { checks: 0, newPosts: 0, matched: 0 }
+      stats: { checks: 0, newPosts: 0, commented: 0 }
     });
     const kw = parseKeywords(keywords);
+    const cm = parseComments(comments);
     pushLog(s, {
       type: 'info',
-      text: `Bắt đầu theo dõi · mỗi ${interval} phút · ${kw.length ? `từ khóa: ${kw.join(', ')}` : 'không lọc từ khóa'}`
+      text: `Bắt đầu theo dõi · mỗi ${interval} phút · ${kw.length ? `từ khóa: ${kw.join(', ')}` : 'không lọc từ khóa'} · ${cm.length ? `${cm.length} mẫu bình luận` : 'không tự bình luận'} · ${maxAge ? `chỉ bài đăng trong ${maxAge} phút` : 'không giới hạn tuổi bài'}`
     });
     return s;
   });
@@ -382,18 +590,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Từ content script
   if (sender.tab && msg.type === 'ready') return respond(handleReady(sender.tab.id, msg.url));
-  if (sender.tab && msg.type === 'scanResult') return respond(handleScanResult(sender.tab.id, msg).then(() => ({})));
+  if (sender.tab && msg.type === 'scanResult') {
+    return respond(handleScanResult(sender.tab.id, msg).then((toComment) => ({ toComment })));
+  }
+  if (sender.tab && msg.type === 'commentResult') {
+    return respond(handleCommentResult(sender.tab.id, msg).then(() => ({})));
+  }
 
   // Từ side panel
   switch (msg.type) {
     case 'panelInfo':
       return respond(panelInfo(msg.tabId));
     case 'start':
-      return respond(startWatching(msg.tabId, msg.keywords || '', msg.intervalMin).then(() => ({})));
+      return respond(startWatching(msg.tabId, msg.keywords || '', msg.comments || '', msg.maxAgeMin, msg.clearHours, msg.delayMin, msg.delayMax, msg.intervalMin).then(() => ({})));
     case 'stop':
       return respond(stopWatching(msg.tabId).then(() => ({})));
     case 'checkNow':
       return respond(triggerCheck(msg.tabId, 'manual').then(() => ({})));
+    case 'clearHistory':
+      return respond(clearCommented().then(() => ({ message: 'Đã xóa lịch sử bình luận.' })));
+    case 'testComment':
+      return respond(testComment(msg.tabId, msg.text));
     case 'clearLog':
       return respond(
         updateTab(msg.tabId, (s) => {

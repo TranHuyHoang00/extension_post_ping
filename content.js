@@ -11,6 +11,8 @@
   const MAX_POSTS = 30;
   const TEXT_LIMIT = 1500;
 
+  const postEls = new Map(); // key bài -> phần tử DOM, dùng để bình luận sau khi quét
+
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   async function waitFor(fn, timeout) {
@@ -25,18 +27,19 @@
 
   function hash(str) {
     let h = 5381;
-    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    for (let i = 0; i < str.length; i++)
+      h = ((h << 5) + h + str.charCodeAt(i)) | 0;
     return (h >>> 0).toString(36);
   }
 
   function isLoadingPlaceholder(el) {
-    if (el.getAttribute('aria-busy') === 'true') return true;
-    const label = el.getAttribute('aria-label') || '';
+    if (el.getAttribute("aria-busy") === "true") return true;
+    const label = el.getAttribute("aria-label") || "";
     return /loading|đang tải/i.test(label);
   }
 
   function isCommentArticle(el) {
-    const label = el.getAttribute('aria-label') || '';
+    const label = el.getAttribute("aria-label") || "";
     return /comment|bình luận|phản hồi|reply/i.test(label);
   }
 
@@ -49,9 +52,11 @@
       return !anc || !feed.contains(anc);
     });
     if (posts.length === 0) {
-      posts = [...feed.children].filter((el) => (el.innerText || '').trim().length > 20);
+      posts = [...feed.children].filter(
+        (el) => (el.innerText || "").trim().length > 20,
+      );
     }
-    return posts.filter((el) => (el.innerText || '').trim().length > 0);
+    return posts.filter((el) => (el.innerText || "").trim().length > 0);
   }
 
   function getFeed() {
@@ -63,12 +68,12 @@
     /\/groups\/[^/]+\/(?:posts|permalink)\/(\d+|pfbid[0-9A-Za-z]+)/,
     /[?&]story_fbid=(\d+|pfbid[0-9A-Za-z]+)/,
     /[?&]multi_permalinks=(\d+)/,
-    /[?&]set=pcb\.(\d+)/
+    /[?&]set=pcb\.(\d+)/,
   ];
 
   function findPostId(root) {
-    for (const a of root.querySelectorAll('a[href]')) {
-      const href = a.getAttribute('href') || '';
+    for (const a of root.querySelectorAll("a[href]")) {
+      const href = a.getAttribute("href") || "";
       for (const re of POST_ID_PATTERNS) {
         const m = href.match(re);
         if (m) return m[1];
@@ -81,26 +86,31 @@
   async function revealPermalink(root) {
     const anchors = [...root.querySelectorAll('a[role="link"], a[href]')]
       .filter((a) => {
-        if (a.closest('[role="article"]') !== root.closest('[role="article"]')) return false;
-        const href = a.getAttribute('href') || '';
-        return href === '#' || href === '' || /__cft__/.test(href);
+        if (a.closest('[role="article"]') !== root.closest('[role="article"]'))
+          return false;
+        const href = a.getAttribute("href") || "";
+        return href === "#" || href === "" || /__cft__/.test(href);
       })
       .slice(0, 8);
     for (const a of anchors) {
-      a.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, view: window }));
-      a.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      a.dispatchEvent(
+        new MouseEvent("mouseover", { bubbles: true, view: window }),
+      );
+      a.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     }
     if (anchors.length) await sleep(400);
     for (const a of anchors) {
-      a.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, view: window }));
-      a.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+      a.dispatchEvent(
+        new MouseEvent("mouseout", { bubbles: true, view: window }),
+      );
+      a.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     }
   }
 
   async function expandSeeMore(root) {
-    const btns = [...root.querySelectorAll('div[role="button"], span[role="button"]')].filter((b) =>
-      /^(xem thêm|see more)$/i.test((b.innerText || '').trim())
-    );
+    const btns = [
+      ...root.querySelectorAll('div[role="button"], span[role="button"]'),
+    ].filter((b) => /^(xem thêm|see more)$/i.test((b.innerText || "").trim()));
     for (const b of btns.slice(0, 3)) {
       try {
         b.click();
@@ -110,50 +120,101 @@
   }
 
   function getAuthor(root) {
-    const h = root.querySelector('h2, h3, h4');
-    let name = h ? (h.innerText || '').split('\n')[0] : '';
+    const h = root.querySelector("h2, h3, h4");
+    let name = h ? (h.innerText || "").split("\n")[0] : "";
     if (!name) {
-      const strong = root.querySelector('strong');
-      name = strong ? strong.innerText : '';
+      const strong = root.querySelector("strong");
+      name = strong ? strong.innerText : "";
     }
-    return name.split('·')[0].replace(/\s+/g, ' ').trim();
+    return name.split("·")[0].replace(/\s+/g, " ").trim();
   }
 
   function cleanText(t) {
-    return (t || '')
-      .replace(/\s*(…\s*)?(Xem thêm|See more|Ẩn bớt|See less)\s*$/i, '')
-      .replace(/[ \t]+/g, ' ')
-      .replace(/\n{3,}/g, '\n\n')
+    return (t || "")
+      .replace(/\s*(…\s*)?(Xem thêm|See more|Ẩn bớt|See less)\s*$/i, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
       .trim();
   }
 
   function getText(root) {
     const msgEls = root.querySelectorAll(
-      '[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]'
+      '[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]',
     );
     if (msgEls.length) {
-      return cleanText([...msgEls].map((e) => e.innerText).join('\n')).slice(0, TEXT_LIMIT);
+      return cleanText([...msgEls].map((e) => e.innerText).join("\n")).slice(
+        0,
+        TEXT_LIMIT,
+      );
     }
     // Dự phòng: gom các khối dir="auto" của chính bài viết (bỏ tiêu đề, bình luận, nút bấm)
     const parts = [];
-    for (const d of root.querySelectorAll('div[dir="auto"], span[dir="auto"]')) {
+    for (const d of root.querySelectorAll(
+      'div[dir="auto"], span[dir="auto"]',
+    )) {
       if (d.closest('h2, h3, h4, [role="button"]')) continue;
       const art = d.closest('[role="article"]');
       if (art && art !== root && root.contains(art)) continue;
-      if (d.parentElement && d.parentElement.closest('div[dir="auto"], span[dir="auto"]')) continue;
-      const t = (d.innerText || '').trim();
+      if (
+        d.parentElement &&
+        d.parentElement.closest('div[dir="auto"], span[dir="auto"]')
+      )
+        continue;
+      const t = (d.innerText || "").trim();
       if (t && !parts.includes(t)) parts.push(t);
     }
-    return cleanText(parts.join('\n')).slice(0, TEXT_LIMIT);
+    return cleanText(parts.join("\n")).slice(0, TEXT_LIMIT);
+  }
+
+  // Đọc link thời gian dưới tên người đăng ("5 phút", "2 giờ", "Hôm qua lúc...") -> số phút trước.
+  // Trả về null nếu không đọc được.
+  function parseAgeText(raw) {
+    const t = (raw || "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!t || t.length > 40) return null;
+    if (/^(vừa xong|just now|now)$/.test(t)) return 0;
+    let m = t.match(/^(\d+)\s*(giây|giây|s|sec|secs|seconds?)$/);
+    if (m) return Number(m[1]) / 60;
+    m = t.match(/^(\d+)\s*(phút|m|min|mins|minutes?)$/);
+    if (m) return Number(m[1]);
+    m = t.match(/^(\d+)\s*(giờ|h|hr|hrs|hours?)$/);
+    if (m) return Number(m[1]) * 60;
+    m = t.match(/^(\d+)\s*(ngày|d|days?)$/);
+    if (m) return Number(m[1]) * 1440;
+    m = t.match(/^(\d+)\s*(tuần|w|wks?|weeks?)$/);
+    if (m) return Number(m[1]) * 10080;
+    if (/^(hôm qua|yesterday)/.test(t)) return 1440;
+    if (
+      /^\d+\s*(tháng|năm)|^(tháng|january|february|march|april|may|june|july|august|september|october|november|december)/.test(
+        t,
+      )
+    ) {
+      return 43200; // ngày tháng cụ thể -> coi là cũ
+    }
+    return null;
+  }
+
+  function getAgeMin(root) {
+    const art = root.closest('[role="article"]') || root;
+    for (const a of [...root.querySelectorAll('a[role="link"], a[href]')].slice(
+      0,
+      20,
+    )) {
+      if (a.closest('[role="article"]') !== art) continue;
+      const age = parseAgeText(a.innerText);
+      if (age !== null) return age;
+    }
+    return null;
   }
 
   function currentGroupSlug() {
     const m = location.pathname.match(/^\/groups\/([^/]+)/);
-    return m ? m[1] : '';
+    return m ? m[1] : "";
   }
 
   async function extract(el) {
-    const root = el.matches('[role="article"]') ? el : el.querySelector('[role="article"]') || el;
+    const root = el.matches('[role="article"]')
+      ? el
+      : el.querySelector('[role="article"]') || el;
     await expandSeeMore(root);
     let postId = findPostId(root);
     if (!postId) {
@@ -170,7 +231,77 @@
     const url = postId
       ? `https://www.facebook.com/groups/${slug}/posts/${postId}/`
       : `https://www.facebook.com/groups/${slug}/`;
-    return { keys, author, text, url };
+    postEls.set(keys[0], root);
+    return { keys, author, text, url, ageMin: getAgeMin(root) };
+  }
+
+  const findCommentBox = (root) =>
+    root.querySelector('[contenteditable="true"][role="textbox"]');
+
+  async function openCommentBox(root) {
+    let box = findCommentBox(root);
+    if (box) return box;
+    const btn = [
+      ...root.querySelectorAll('div[role="button"], span[role="button"]'),
+    ].find((b) =>
+      /^(bình luận|comment|viết bình luận|leave a comment)$/i.test(
+        ((b.getAttribute("aria-label") || "") + "").trim() ||
+          (b.innerText || "").trim(),
+      ),
+    );
+    if (btn) btn.click();
+    return waitFor(() => findCommentBox(root), 4000);
+  }
+
+  async function postComment(root, text) {
+    if (!root.isConnected) throw new Error("bài viết không còn trên trang");
+    root.scrollIntoView({ block: "center" });
+    await sleep(800);
+    const box = await openCommentBox(root);
+    if (!box) throw new Error("không tìm thấy ô bình luận");
+
+    box.focus();
+    await sleep(300);
+    document.execCommand("insertText", false, text);
+    await sleep(600);
+    if (!(box.innerText || "").trim())
+      throw new Error("không nhập được nội dung");
+
+    const opts = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+    };
+    box.dispatchEvent(new KeyboardEvent("keydown", opts));
+    box.dispatchEvent(new KeyboardEvent("keypress", opts));
+    box.dispatchEvent(new KeyboardEvent("keyup", opts));
+    await sleep(2500);
+    if ((box.innerText || "").trim()) throw new Error("đã nhập nhưng chưa gửi");
+  }
+
+  async function runComments(toComment) {
+    const results = [];
+    for (let i = 0; i < toComment.length; i++) {
+      const c = toComment[i];
+      const root = postEls.get(c.key);
+      await sleep(c.delayMs || 0);
+      try {
+        if (!root) throw new Error("không tìm thấy bài trên trang");
+        await postComment(root, c.text);
+        results.push({ ok: true, author: c.author, text: c.text });
+      } catch (e) {
+        results.push({
+          ok: false,
+          author: c.author,
+          text: c.text,
+          error: String((e && e.message) || e),
+        });
+      }
+    }
+    return results;
   }
 
   async function scan() {
@@ -178,7 +309,6 @@
     if (!feed) return [];
     await sleep(1500);
 
-    // Cuộn thêm vài lần để Facebook tải thêm bài, rồi quay lại đầu trang.
     for (let i = 0; i < EXTRA_SCROLLS; i++) {
       window.scrollBy(0, window.innerHeight * 1.5);
       await sleep(1500);
@@ -192,16 +322,38 @@
         const p = await extract(el);
         if (p) posts.push(p);
       } catch (e) {
-        console.warn('[PostPing] extract error', e);
+        console.warn("[PostPing] extract error", e);
       }
     }
     return posts;
   }
 
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type !== "testComment") return false;
+    (async () => {
+      try {
+        const feed = document.querySelector('[role="feed"]');
+        const el = feed && findPosts(feed)[0];
+        if (!el) throw new Error("Không tìm thấy bài nào trên feed.");
+        const root = el.matches('[role="article"]')
+          ? el
+          : el.querySelector('[role="article"]') || el;
+        await postComment(root, msg.text);
+        sendResponse({ ok: true, author: getAuthor(root) || "Không rõ" });
+      } catch (e) {
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      }
+    })();
+    return true;
+  });
+
   async function main() {
     let resp;
     try {
-      resp = await chrome.runtime.sendMessage({ type: 'ready', url: location.href });
+      resp = await chrome.runtime.sendMessage({
+        type: "ready",
+        url: location.href,
+      });
     } catch {
       return; // extension vừa được reload, content script cũ không còn kết nối
     }
@@ -214,9 +366,23 @@
     } catch (e) {
       error = String((e && e.message) || e);
     }
+    let toComment = [];
     try {
-      await chrome.runtime.sendMessage({ type: 'scanResult', url: location.href, posts, error });
+      const r = await chrome.runtime.sendMessage({
+        type: "scanResult",
+        url: location.href,
+        posts,
+        error,
+      });
+      toComment = (r && r.toComment) || [];
     } catch {}
+
+    if (toComment.length) {
+      const results = await runComments(toComment);
+      try {
+        await chrome.runtime.sendMessage({ type: "commentResult", results });
+      } catch {}
+    }
   }
 
   main();
