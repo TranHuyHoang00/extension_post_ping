@@ -413,7 +413,8 @@ async function handleScanResult(tabId, msg) {
       // Feed xếp mới nhất trước -> đảo lại để log theo thứ tự cũ → mới.
       // Bài đăng quá maxAgeMin phút thì không tính là mới (không đọc được giờ đăng thì vẫn tính).
       const maxAge = Number(s.maxAgeMin) || 0;
-      const tooOld = (p) => maxAge > 0 && typeof p.ageMin === 'number' && p.ageMin > maxAge;
+      // Không đọc được giờ đăng thì không thể chắc bài còn mới -> coi là cũ khi đang bật giới hạn thời gian.
+      const tooOld = (p) => maxAge > 0 && (typeof p.ageMin !== 'number' || p.ageMin > maxAge);
       const unseen = posts.filter((p) => !isSeen(p));
       const skippedOld = unseen.filter(tooOld);
       skippedOld.forEach(markSeen);

@@ -194,6 +194,12 @@
     if (m) return Number(m[1]) * 10080;
     if (/^(hôm qua|yesterday)/.test(t)) return 1440;
     if (
+      /^(thứ|chủ nhật|monday|tuesday|wednesday|thursday|friday|saturday|sunday)/.test(t) ||
+      /^\d+\s*(january|february|march|april|may|june|july|august|september|october|november|december)/.test(t)
+    ) {
+      return 1440;
+    }
+    if (
       /^\d+\s*(tháng|năm)|^(tháng|january|february|march|april|may|june|july|august|september|october|november|december)/.test(
         t,
       )
@@ -210,7 +216,10 @@
       20,
     )) {
       if (a.closest('[role="article"]') !== art) continue;
-      const age = parseAgeText(a.innerText);
+      const age =
+        parseAgeText(a.innerText) ??
+        parseAgeText(a.getAttribute("aria-label")) ??
+        parseAgeText(a.getAttribute("title"));
       if (age !== null) return age;
     }
     return null;
@@ -241,7 +250,10 @@
     const text = getText(root);
     if (!author && !text) return null;
 
-    const keys = [`h_${hash(`${author}|${text.slice(0, 300)}`)}`];
+    // Khóa băm phải ổn định giữa các lần quét: bỏ số (lượt thích, bình luận, giờ đăng...)
+    // và chỉ lấy phần đầu nội dung, nếu không cùng một bài sẽ bị coi là "bài mới" mãi.
+    const stableText = norm(text).toLowerCase().replace(/\d+/g, "").slice(0, 100);
+    const keys = [`h_${hash(`${author}|${stableText}`)}`];
     if (postId) keys.unshift(`p_${postId}`);
     const slug = currentGroupSlug();
     const url = postId
@@ -415,7 +427,12 @@
     await sleep(800);
 
     const opened = await openCommentBox(root);
-    if (!opened) throw new Error("không tìm thấy ô bình luận");
+    if (!opened) {
+      const btnCount = root.querySelectorAll('[data-ad-rendering-role="comment_button"]').length;
+      throw new Error(
+        `không tìm thấy ô bình luận (nút bình luận: ${btnCount}, ô nhập trong bài: ${root.querySelectorAll(TEXTBOX_SEL).length}, hộp thoại mở: ${findOpenDialogs().length})`,
+      );
+    }
     const { box, dialog } = opened;
 
     try {
