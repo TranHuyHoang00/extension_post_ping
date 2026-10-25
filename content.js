@@ -266,40 +266,75 @@
   }
 
   const COMMENT_BTN_RE =
-    /^(bình luận|comment|viết bình luận|leave a comment)$/i;
+    /^(bình luận|comment|viết bình luận|write a comment|leave a comment)$/i;
+
+  const isVisible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+
+  // Hộp thoại (modal) bình luận đang mở, ưu tiên cái nằm trên cùng
+  function findOpenDialogs() {
+    return [...document.querySelectorAll('[role="dialog"]')].filter(isVisible);
+  }
+
+  // Ô bình luận chính của bài trong modal: bỏ qua ô trả lời nằm trong bình luận con
+  function findDialogBox(dialog) {
+    const boxes = [...dialog.querySelectorAll(TEXTBOX_SEL)].filter(isVisible);
+    const main = boxes.filter((b) => {
+      const art = b.closest('[role="article"]');
+      return !art || !isCommentArticle(art);
+    });
+    // Ô bình luận chính nằm cuối modal
+    return main[main.length - 1] || null;
+  }
 
   async function openCommentBox(root) {
     const existing = findCommentBox(root);
-    if (existing) return existing;
+    if (existing) return { box: existing, dialog: null };
 
+    const dialogsBefore = new Set(findOpenDialogs());
+
+    // Nút/icon bình luận của chính bài (bỏ qua nút nằm trong bình luận con)
     const btn = [
-      ...root.querySelectorAll('div[role="button"], span[role="button"]'),
-    ].find(
-      (b) =>
+      ...root.querySelectorAll(
+        '[data-ad-rendering-role="comment_button"], div[role="button"], span[role="button"]',
+      ),
+    ].find((b) => {
+      const art = b.closest('[role="article"]');
+      if (art && art !== root && root.contains(art)) return false;
+      return (
+        b.matches('[data-ad-rendering-role="comment_button"]') ||
         COMMENT_BTN_RE.test((b.getAttribute("aria-label") || "").trim()) ||
-        COMMENT_BTN_RE.test((b.innerText || "").trim()),
-    );
-
-    const focusedBefore = document.activeElement;
-    if (btn) btn.click();
+        COMMENT_BTN_RE.test((b.innerText || "").trim())
+      );
+    });
+    if (!btn) return null;
+    btn.click();
 
     return waitFor(() => {
-      const b = findCommentBox(root);
-      if (b) return b;
-      // Ô bình luận có thể mở trong hộp thoại riêng, ngoài root:
-      // nhận ô đang được focus nếu nó vừa được focus sau khi bấm nút
-      const a = document.activeElement;
-      if (
-        btn &&
-        a &&
-        a !== focusedBefore &&
-        a.matches &&
-        a.matches(TEXTBOX_SEL) &&
-        (root.contains(a) || a.closest('[role="dialog"]'))
-      )
-        return a;
+      // Ô bình luận hiện ngay trong bài
+      const inline = findCommentBox(root);
+      if (inline) return { box: inline, dialog: null };
+      // Ô bình luận nằm trong modal vừa mở
+      const dialogs = findOpenDialogs();
+      for (let i = dialogs.length - 1; i >= 0; i--) {
+        if (dialogsBefore.has(dialogs[i])) continue;
+        const b = findDialogBox(dialogs[i]);
+        if (b) return { box: b, dialog: dialogs[i] };
+      }
       return null;
-    }, 4000);
+    }, 6000);
+  }
+
+  // Đóng modal bình luận sau khi gửi để không chặn các bài tiếp theo
+  async function closeDialog(dialog) {
+    if (!dialog) return;
+    for (let i = 0; i < 3 && dialog.isConnected && isVisible(dialog); i++) {
+      const closeBtn = dialog.querySelector(
+        '[aria-label="Đóng"], [aria-label="Close"]',
+      );
+      if (closeBtn) closeBtn.click();
+      else pressKey(document.activeElement || document.body, "Escape", "Escape", 27);
+      await sleep(600);
+    }
   }
 
   // Tách chuỗi theo "ký tự hiển thị" để emoji ghép không bị cắt đôi
@@ -379,30 +414,37 @@
     root.scrollIntoView({ block: "center" });
     await sleep(800);
 
-    const box = await openCommentBox(root);
-    if (!box) throw new Error("không tìm thấy ô bình luận");
+    const opened = await openCommentBox(root);
+    if (!opened) throw new Error("không tìm thấy ô bình luận");
+    const { box, dialog } = opened;
 
-    await typeText(box, text);
-    await sleep(rand(400, 900));
+    try {
+      await typeText(box, text);
+      await sleep(rand(400, 900));
 
-    if (norm(box.innerText) !== norm(text))
-      throw new Error("nội dung nhập vào không khớp");
+      if (norm(box.innerText) !== norm(text))
+        throw new Error("nội dung nhập vào không khớp");
 
-    await closeSuggestions(box);
-    pressKey(box, "Enter", "Enter", 13);
+      await closeSuggestions(box);
+      pressKey(box, "Enter", "Enter", 13);
 
-    // Gửi thành công khi ô trống (hoặc bị thay bằng ô mới trống) VÀ nội dung đã hiện trên trang
-    const want = norm(text);
-    const sent = await waitFor(() => {
-      let empty;
-      if (box.isConnected) empty = !norm(box.innerText);
-      else {
-        const nb = findCommentBox(root);
-        empty = !!nb && !norm(nb.innerText);
-      }
-      return empty && norm(document.body.innerText).includes(want);
-    }, SEND_CONFIRM_MS);
-    if (!sent) throw new Error("đã nhập nhưng chưa gửi");
+      // Gửi thành công khi ô trống (hoặc bị thay bằng ô mới trống) VÀ nội dung đã hiện trên trang
+      const want = norm(text);
+      const sent = await waitFor(() => {
+        let empty;
+        if (box.isConnected) empty = !norm(box.innerText);
+        else {
+          const nb = dialog ? findDialogBox(dialog) : findCommentBox(root);
+          empty = !!nb && !norm(nb.innerText);
+        }
+        return empty && norm(document.body.innerText).includes(want);
+      }, SEND_CONFIRM_MS);
+      if (!sent) throw new Error("đã nhập nhưng chưa gửi");
+    } finally {
+      // Đợi vài giây cho bình luận hiển thị hẳn rồi mới đóng modal
+      if (dialog) await sleep(rand(2500, 4000));
+      await closeDialog(dialog);
+    }
   }
 
   async function runComments(toComment) {
