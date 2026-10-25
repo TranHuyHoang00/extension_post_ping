@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PostPing",
   "short_name": "PostPing",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Theo dõi bài viết mới trong Facebook Group theo từng tab.",
   "icons": {
     "16": "icons/icon16.png",

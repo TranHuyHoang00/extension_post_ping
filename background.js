@@ -458,7 +458,7 @@ async function handleScanResult(tabId, msg) {
           key: p.keys[0],
           author: p.author || 'Không rõ',
           text: commentPool[Math.floor(Math.random() * commentPool.length)],
-          delayMs: randomDelayMs(s.delayMin, s.delayMax)
+          delayMs: 0
         });
       }
       if (toComment.length) {
@@ -467,7 +467,7 @@ async function handleScanResult(tabId, msg) {
         s.busyUntil = Date.now() + totalDelay + toComment.length * 30000;
         pushLog(s, {
           type: 'info',
-          text: `Sẽ comment ${toComment.length} bài, bài đầu sau ${Math.round(toComment[0].delayMs / 1000)} giây.`
+          text: `Sẽ comment ${toComment.length} bài ngay.`
         });
       }
       if (duplicates) {

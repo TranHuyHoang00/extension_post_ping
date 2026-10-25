@@ -11,8 +11,6 @@ const DEFAULTS = {
   intervalMin: 5,
   maxAgeMin: 15,
   clearHours: 24,
-  delayMin: 60,
-  delayMax: 180,
 };
 
 const els = {
@@ -24,8 +22,6 @@ const els = {
   interval: $("interval"),
   maxAge: $("maxAge"),
   clearHours: $("clearHours"),
-  delayMin: $("delayMin"),
-  delayMax: $("delayMax"),
   toggleBtn: $("toggleBtn"),
   checkBtn: $("checkBtn"),
   testBtn: $("testBtn"),
@@ -93,8 +89,6 @@ function renderStatus() {
   els.interval.disabled = running;
   els.maxAge.disabled = running;
   els.clearHours.disabled = running;
-  els.delayMin.disabled = running;
-  els.delayMax.disabled = running;
 
   if (errorText) showNotice(errorText);
   else if (!tab) showNotice("Tab này đã đóng.");
@@ -119,8 +113,6 @@ function fillForm() {
   els.interval.value = src.intervalMin;
   els.maxAge.value = src.maxAgeMin;
   els.clearHours.value = src.clearHours;
-  els.delayMin.value = src.delayMin;
-  els.delayMax.value = src.delayMax;
   formFilled = true;
 }
 
@@ -233,8 +225,6 @@ els.toggleBtn.addEventListener("click", () => {
     comments: els.comments.value.trim(),
     maxAgeMin: Math.max(0, Math.round(Number(els.maxAge.value) || 0)),
     clearHours: Math.max(0, Number(els.clearHours.value) || 0),
-    delayMin: Math.max(0, Number(els.delayMin.value) || 0),
-    delayMax: Math.max(0, Number(els.delayMax.value) || 0),
     intervalMin: Math.round(interval),
   });
 });
