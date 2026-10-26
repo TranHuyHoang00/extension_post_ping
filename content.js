@@ -20,6 +20,7 @@
   const TEXTBOX_SEL = '[contenteditable="true"][role="textbox"]';
 
   const postEls = new Map(); // key bài -> phần tử DOM, dùng để bình luận sau khi quét
+  const postMeta = new Map(); // key bài -> {author, head} để tìm lại bài khi DOM bị Facebook dựng lại
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const rand = (min, max) => min + Math.random() * (max - min);
@@ -260,7 +261,11 @@
       ? `https://www.facebook.com/groups/${slug}/posts/${postId}/`
       : `https://www.facebook.com/groups/${slug}/`;
     // Lưu theo mọi key để background gửi key nào cũng tìm được bài
-    for (const k of keys) postEls.set(k, root);
+    const meta = { author, head: stableText.slice(0, 40) };
+    for (const k of keys) {
+      postEls.set(k, root);
+      postMeta.set(k, meta);
+    }
     return { keys, author, text, url, ageMin: getAgeMin(root) };
   }
 
@@ -424,13 +429,24 @@
     if (!norm(text)) throw new Error("nội dung bình luận trống");
 
     root.scrollIntoView({ block: "center" });
-    await sleep(800);
+    await sleep(1200);
 
-    const opened = await openCommentBox(root);
+    let opened = await openCommentBox(root);
+    if (!opened) {
+      // Thử lại một lần: cuộn lại để Facebook dựng lại nội dung bài rồi bấm nút lần nữa
+      window.scrollBy(0, -200);
+      await sleep(500);
+      root.scrollIntoView({ block: "center" });
+      await sleep(1500);
+      opened = await openCommentBox(root);
+    }
     if (!opened) {
       const btnCount = root.querySelectorAll('[data-ad-rendering-role="comment_button"]').length;
+      const feed = document.querySelector('[role="feed"]');
+      const rect = root.getBoundingClientRect();
       throw new Error(
-        `không tìm thấy ô bình luận (nút bình luận: ${btnCount}, ô nhập trong bài: ${root.querySelectorAll(TEXTBOX_SEL).length}, hộp thoại mở: ${findOpenDialogs().length})`,
+        `không tìm thấy ô bình luận (nút bình luận: ${btnCount}, ô nhập trong bài: ${root.querySelectorAll(TEXTBOX_SEL).length}, hộp thoại mở: ${findOpenDialogs().length}, ` +
+          `bài còn trong feed: ${!!(feed && feed.contains(root))}, kích thước: ${Math.round(rect.width)}x${Math.round(rect.height)}, tab đang hiển thị: ${document.visibilityState})`,
       );
     }
     const { box, dialog } = opened;
@@ -464,21 +480,49 @@
     }
   }
 
+  // Sau khi quét (cuộn xuống rồi lên lại) Facebook tái tạo DOM của bài nên phần tử đã lưu
+  // có thể là bản cũ (nút bấm không còn phản hồi). Tìm lại bài theo khóa trong feed hiện tại.
+  function relocatePost(key, fallback) {
+    const meta = postMeta.get(key);
+    const feed = document.querySelector('[role="feed"]');
+    if (feed) {
+      for (const el of findPosts(feed)) {
+        const root = articleRoot(el);
+        let match = key.startsWith("p_") && findPostId(root) === key.slice(2);
+        if (!match && meta) {
+          const stable = norm(getText(root)).toLowerCase().replace(/\d+/g, "");
+          match = getAuthor(root) === meta.author && stable.slice(0, 40) === meta.head;
+        }
+        if (match) {
+          postEls.set(key, root);
+          return root;
+        }
+      }
+    }
+    return fallback && fallback.isConnected ? fallback : null;
+  }
+
   async function runComments(toComment) {
     const results = [];
     for (const c of toComment) {
-      const root = postEls.get(c.key);
+      const root = relocatePost(c.key, postEls.get(c.key));
       try {
         if (!root) throw new Error("không tìm thấy bài trên trang");
         await sleep(c.delayMs || 0);
         await postComment(root, c.text);
         results.push({ ok: true, author: c.author, text: c.text });
       } catch (e) {
+        const error = String((e && e.message) || e);
         results.push({
           ok: false,
           author: c.author,
           text: c.text,
-          error: String((e && e.message) || e),
+          error,
+          key: c.key,
+          claimed: c.claimed,
+          postKeys: c.postKeys,
+          // Đã bấm gửi nhưng không xác nhận được: có thể đã đăng, không thử lại để tránh bình luận trùng
+          maybeSent: error === "đã nhập nhưng chưa gửi",
         });
       }
     }

@@ -9,6 +9,7 @@ const MIN_INTERVAL = 1;
 const MAX_INTERVAL = 1440;
 const PENDING_TIMEOUT_MS = 90 * 1000;
 const MAX_COMMENTS_PER_CHECK = 3;
+const MAX_RETRIES = 2;
 
 const RESERVED_GROUP_PATHS = new Set([
   'feed', 'discover', 'joins', 'create', 'notifications', 'search', 'you', 'requests', 'learn'
@@ -110,6 +111,18 @@ async function claimKeys(keys) {
       };
     });
     tx.oncomplete = () => resolve(!dup);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+// Nhả các khóa đã giữ chỗ (bình luận thất bại) để lần kiểm tra sau được thử lại.
+async function releaseKeys(keys) {
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(COMMENTED_STORE, 'readwrite');
+    const store = tx.objectStore(COMMENTED_STORE);
+    keys.forEach((k) => store.delete(k));
+    tx.oncomplete = resolve;
     tx.onerror = tx.onabort = () => reject(tx.error);
   });
 }
@@ -413,12 +426,14 @@ async function handleScanResult(tabId, msg) {
       // Feed xếp mới nhất trước -> đảo lại để log theo thứ tự cũ → mới.
       // Bài đăng quá maxAgeMin phút thì không tính là mới (không đọc được giờ đăng thì vẫn tính).
       const maxAge = Number(s.maxAgeMin) || 0;
-      // Không đọc được giờ đăng thì không thể chắc bài còn mới -> coi là cũ khi đang bật giới hạn thời gian.
-      const tooOld = (p) => maxAge > 0 && (typeof p.ageMin !== 'number' || p.ageMin > maxAge);
+      // Chỉ coi là cũ khi chắc chắn quá hạn; không đọc được giờ đăng thì vẫn tính là bài mới để khỏi bỏ sót.
+      const tooOld = (p) => maxAge > 0 && typeof p.ageMin === 'number' && p.ageMin > maxAge;
       const unseen = posts.filter((p) => !isSeen(p));
-      const skippedOld = unseen.filter(tooOld);
+      // Bài đang được thử lại sau lỗi bình luận thì không loại vì quá hạn.
+      const isRetry = (p) => (s.retries || {})[p.keys[0]] > 0;
+      const skippedOld = unseen.filter((p) => tooOld(p) && !isRetry(p));
       skippedOld.forEach(markSeen);
-      const fresh = unseen.filter((p) => !tooOld(p)).reverse();
+      const fresh = unseen.filter((p) => !tooOld(p) || isRetry(p)).reverse();
       const entries = [];
       const commentPool = parseComments(s.comments);
       const commentable = [];
@@ -447,10 +462,12 @@ async function handleScanResult(tabId, msg) {
       await purgeCommented(Number(s.clearHours) || 0);
       let duplicates = 0;
       let examined = 0;
-      for (const p of [...commentable].reverse()) {
+      const newestFirst = [...commentable].reverse();
+      for (const p of newestFirst) {
         if (toComment.length >= MAX_COMMENTS_PER_CHECK) break;
         examined++;
-        if (!(await claimKeys(commentKeys(s.groupId, p)))) {
+        const claimed = commentKeys(s.groupId, p);
+        if (!(await claimKeys(claimed))) {
           duplicates++;
           continue;
         }
@@ -458,9 +475,13 @@ async function handleScanResult(tabId, msg) {
           key: p.keys[0],
           author: p.author || 'Không rõ',
           text: commentPool[Math.floor(Math.random() * commentPool.length)],
-          delayMs: 0
+          delayMs: 0,
+          claimed,
+          postKeys: p.keys
         });
       }
+      // Bài vượt giới hạn mỗi lần kiểm tra: bỏ đánh dấu đã thấy để lần sau còn được bình luận.
+      for (const p of newestFirst.slice(examined)) p.keys.forEach((k) => seen.delete(k));
       if (toComment.length) {
         // Báo cho vòng kiểm tra sau biết đang bận bình luận (tránh reload tab giữa chừng).
         const totalDelay = toComment.reduce((n, c) => n + c.delayMs, 0);
@@ -490,9 +511,25 @@ async function handleScanResult(tabId, msg) {
 
 async function handleCommentResult(tabId, msg) {
   const results = Array.isArray(msg.results) ? msg.results : [];
+  // Thất bại mà chắc chắn chưa đăng gì -> nhả khóa để lần kiểm tra sau thử lại (tối đa MAX_RETRIES lần/bài).
+  const retryable = results.filter((r) => !r.ok && r.claimed && !r.maybeSent);
+  if (retryable.length) {
+    try {
+      await releaseKeys(retryable.flatMap((r) => r.claimed));
+    } catch {}
+  }
   await updateTab(tabId, (s) => {
     if (!s) return undefined;
     s.busyUntil = 0;
+    s.retries = s.retries || {};
+    for (const r of retryable) {
+      const n = (s.retries[r.key] || 0) + 1;
+      s.retries[r.key] = n;
+      if (n <= MAX_RETRIES) s.seen = s.seen.filter((k) => !(r.postKeys || []).includes(k));
+    }
+    // Giữ bảng đếm gọn: chỉ nhớ 50 bài gần nhất
+    const rk = Object.keys(s.retries);
+    if (rk.length > 50) for (const k of rk.slice(0, rk.length - 50)) delete s.retries[k];
     for (const r of results) {
       if (r.ok) s.stats.commented = (s.stats.commented || 0) + 1;
       pushLog(
